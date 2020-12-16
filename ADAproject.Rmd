@@ -1,0 +1,206 @@
+---
+title: "ADAproject"
+author: "Saras Shenoy"
+date: "11/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+pacman::p_load(survival, survminer, tidyverse, readr, lmtest)
+pacman::p_load(readr, tidyverse, nnet, MASS, funModeling, brant)
+library(VIM)
+library(table1)
+library(DiagrammeR)
+```
+
+```{r}
+maindata <- read.csv("/Users/saraswatishenoy/Documents/WashU courses/Adv Data Anakysis/pancreatic cancer.csv", header = T) 
+# change column names
+names(maindata)[2:13] <- c("Agegroup", "Sex", "YOD", "Race", "Cancersite", "Stage.AJCC", "Survival.months", "Status", "Event", "Insurance", "Age.years", "Age.diagnosis")
+# change class
+maindata$Insurance <- as.factor(maindata$Insurance)
+maindata$Sex <- as.factor(maindata$Sex)
+maindata$Race <- as.factor(maindata$Race)
+maindata$Stage.AJCC <- as.factor(maindata$Stage.AJCC)
+maindata$Survival.months <- as.numeric(maindata$Survival.months)
+maindata$Event <- as.factor(maindata$Event)
+maindata$Agegroup <- as.factor(maindata$Agegroup)
+maindata$Age.years <- as.numeric(maindata$Age.years)
+maindata$Status <- as.factor(maindata$Status)
+maindata$Age.diagnosis <- as.numeric(maindata$Age.diagnosis)
+# drop columns
+maindata <- maindata[ ,c(1:10,11,13)]
+# remove data
+maindata <- maindata[maindata$Stage.AJCC != "Blank(s)", ]
+maindata <- maindata[maindata$Stage.AJCC != "UNK Stage", ]
+maindata <- maindata[maindata$Insurance != "Insurance status unknown", ]
+maindata <- maindata[maindata$Race != "Non-Hispanic Unknown Race", ]
+maindata <- maindata %>% drop_na()   #remove missing values
+# Recode
+maindata.1 <- maindata %>% 
+  mutate(stage.cat = case_when(Stage.AJCC %in% c("IA", "IB") ~ "Stage I",
+                               Stage.AJCC %in% c("IIA", "IIB", "IINOS") ~ "Stage II",
+                               Stage.AJCC %in% c("III") ~ "Stage III",
+                               Stage.AJCC %in% c("IV") ~ "Stage IV"),
+         stage.cat = factor(stage.cat, levels = c("Stage I", "Stage II", "Stage III", "Stage IV")),
+         stage.cat = relevel(stage.cat, ref = "Stage I"),
+         insurance.cat = case_when(Insurance %in% c("Insured","Insured/No specifics") ~ "Insured",
+                                   Insurance %in% c("Any Medicaid") ~ "Medicaid",
+                                   Insurance %in% c("Uninsured")~ "Uninsured"),
+         insurance.cat = factor(insurance.cat, levels = c("Insured", "Medicaid", "Uninsured")),
+         insurance.cat = relevel(insurance.cat, ref = "Insured"),
+         event.cat = case_when(Event %in% c("Dead (attributable to this cancer dx)") ~ 1,
+                               Event %in% c("Alive or dead of other cause","Dead (missing/unknown COD)", 
+                                             "N/A not first tumor") ~ 0),
+         event.cat = factor(event.cat, levels = c(0,1), labels = c("Censored", "Dead")),
+         Race  = relevel(Race, ref = "Non-Hispanic White"),
+         age.cat = case_when(Agegroup %in% c("20-24 years","25-29 years","30-34 years","35-39 years") ~ "< 40",
+                             Agegroup %in% c("40-44 years","45-49 years") ~ "40-49",
+                             Agegroup %in% c("50-54 years","55-59 years") ~ "50-59",
+                             Agegroup %in% c("60-64 years") ~ "60-64"),
+         age.cat = factor(age.cat, levels = c("< 40", "40-49","50-59","60-64")))
+
+# table 1
+table1(~age.cat + Sex + Race + stage.cat  + Survival.months + Status + Age.diagnosis | insurance.cat, maindata.1)
+
+# changing label
+label(maindata.1$age.cat) <- "Age group"
+label(maindata.1$stage.cat) <- "Stage at diagnosis"
+label(maindata.1$Survival.months) <- "Survival time in months"
+label(maindata.1$Age.diagnosis) <- "Age at dignosis (years)"
+
+table1(~age.cat + Sex + Race + stage.cat  + Survival.months + Status + Age.diagnosis | insurance.cat, overall = "Total", rowlabelhead = "Variable", footnote = 'SD = Standard Deviation', maindata.1)
+
+#Figure 1
+grViz("digraph flowchart {
+      node [fontname = NewCenturySchoolbook, shape = rectangle, fontsize=10] #node definitions with substituted label text
+      tab1 [label = '@@1']                                              #notes indicate how many boxes you will have in        tab2 [label = '@@2']                  #your diagram. Since I have two sets of exclusions, I will have three nodes.
+      tab3 [label = '@@3']  
+      tab1 -> tab2 -> tab3 
+      }
+      [1]: 'Records received from SEER for pancreatic cancer diagnoses n=34,314'
+      [2]: 'Excluding 6,705 individuals with blanks or unknown stage, insurance and race n=27,605'
+      [3]: 'Excluding 1,348 individuals with missing data on variables used in the analysis n=26,257'
+      ")
+
+# Interpretation
+
+# Age : At diagnosis, those uninsured/had medicaid were on average younger than those insured with mean ages of 54.9 (SD = 7.26), 54.6 (SD = 7.33) and 56.1 (SD = 6.83) respectively.
+
+# Race : Majority of the patients belonged to Non-Hispanic White race irrespective of their insurace category. However, Non-Hispanic Black were higher in the medicaid/uninsured group compared to Insured.
+
+# Stage at diag : A higher percentage of patients from Medicaid (61.8 %)/uninsured (63.7 %) group were diadnosed at stage IV than the Insured group (55.6 %).
+
+# Survival months: The median survival months is highest for the insured group (9 months) followed by Medicaid (5 months) and Unisured (4 months) group.
+
+# Vital status : A higher percentage of patients from Medicaid (89.7 %)/Uninsured (86.4 %) group died during study period than Insured (85.1%) group.
+```
+
+# MLR
+```{r}
+maindata.mlr <- multinom(stage.cat ~ insurance.cat + Age.diagnosis + Sex + Race, data = maindata.1)
+summary(maindata.mlr)
+
+## extract the coefficients 
+exp(coef(maindata.mlr))
+
+#get confidence intervals for ORs
+exp(confint(maindata.mlr, level=0.95))
+
+#for interaction
+maindata.mlrrace <- multinom(stage.cat ~ insurance.cat + Age.diagnosis + Sex + Race + Race*insurance.cat, data = maindata.1)
+summary(maindata.mlrrace)
+
+lrtest(maindata.mlr, maindata.mlrrace)
+
+# Interpretation
+#Being uninsured does not contribute significantly to diagnosis of Stage II (OR = 0.9; CI 077-1.23, p>0.05) and stage III (OR = 1.25 CI 0.96-1.61, p>0.05) compared to Stage I than insured cases, after adjusting for other variables.
+
+#The odds of being diagnosed at Stage IV pancreatic cancer vs Stage I is 1.45 (CI 1.17-2.80, p<0.05) times higher for Unisured cases than Insured, after adjusted for other variables.
+
+#Having any medicaid does not contribute significantly to diagnosis of Stage II (OR = 0.9; CI 077-1.23, p>0.05) and stage III (OR = 1.25 CI 0.96-1.61, p>0.05) compared to Stage I than insured cases.
+
+#The odds of being diagnosed at Stage IV pancreatic cancer vs Stage I is 1.45 (CI 1.17-2.80, p<0.05) times higher for Unisured cases than Insured, after adjusted for other variables.
+
+# By lrtest, p-value for interaction model is not significant (p>0.05). Race does not modify association between stage of pancreatic cancer diagnosis and insurance status. 
+```
+
+# To check if race modifies the association of survival of pancretic cancer and insurance status
+
+```{r}
+# Recode
+maindata.2 <- maindata %>% 
+  mutate(stage.cat = case_when(Stage.AJCC %in% c("IA", "IB") ~ "0",
+                               Stage.AJCC %in% c("IIA", "IIB", "IINOS") ~ "1",
+                               Stage.AJCC %in% c("III") ~ "2",
+                               Stage.AJCC %in% c("IV") ~ "3"),
+         stage.cat = factor(stage.cat, levels = c(0,1,2,3), labels = c("Stage I", "Stage II", "Stage III", "Stage IV")),
+         stage.cat = relevel(stage.cat, ref = "Stage I"),
+         insurance.cat = case_when(Insurance %in% c("Insured","Insured/No specifics") ~ "0",
+                                   Insurance %in% c("Any Medicaid") ~ "1",
+                                   Insurance %in% c("Uninsured")~ "2"),
+         insurance.cat = factor(insurance.cat, levels = c(0,1,2), labels = c("Insured", "Medicaid", "Uninsured")),
+         insurance.cat = relevel(insurance.cat, ref = "Insured"),
+         event.cat = case_when(Event %in% c("Dead (attributable to this cancer dx)") ~ 1,
+                               Event %in% c("Alive or dead of other cause","Dead (missing/unknown COD)", 
+                                             "N/A not first tumor") ~ 0),
+         #event.cat = factor(event.cat, levels = c(0,1)),
+         Race  = relevel(Race, ref = "Non-Hispanic White"),
+         age.cat = case_when(Agegroup %in% c("20-24 years","25-29 years","30-34 years","35-39 years") ~ "< 40",
+                             Agegroup %in% c("40-44 years","45-49 years") ~ "40-49",
+                             Agegroup %in% c("50-54 years","55-59 years") ~ "50-59",
+                             Agegroup %in% c("60-64 years") ~ "60-64"),
+         age.cat = factor(age.cat, levels = c("< 40", "40-49","50-59","60-64")))
+```
+
+
+```{r}
+panc.surv <- survfit(Surv(Survival.months, event.cat) ~ insurance.cat, data = maindata.2)
+panc.surv
+
+ggsurvplot(panc.surv, data = maindata.2, risk.table = TRUE, conf.int=TRUE, tables.theme = clean_theme())
+
+panc.cph <- coxph(Surv(Survival.months,event.cat) ~ insurance.cat, data = maindata.2)
+summary(panc.cph)
+
+#adjust cov
+pancadj.cph <- coxph(Surv(Survival.months,event.cat) ~ insurance.cat + Age.diagnosis + Sex + Race, data = maindata.2)
+summary(pancadj.cph)
+
+#for interaction
+pancadj1.cph <- coxph(Surv(Survival.months,event.cat) ~ insurance.cat + Age.diagnosis + Sex + Race + Race*insurance.cat, data = maindata.2)
+summary(pancadj1.cph)
+
+lrtest(pancadj.cph, pancadj1.cph)
+
+
+# Calculate log-rank test
+survdiff(Surv(Survival.months,event.cat)~ insurance.cat, data = maindata.2)
+```
+#Interpretation
+
+The median survival for Insured patients is 10 months while for unisured/medicaid patients is 5 motnhs.
+
+# Interpretation
+
+Based on log-rank test, there is significant difference between survivval curves/median survival of pancreatic cancer based on insurance status.[Chi-sq(2) = 464, p < 0.05)
+
+#Interpretation
+
+Those patients from medicaid/unisured group had 1.4/1.42 times higher hazard of death than those from insured group. 
+The model is overall significant. (p<0.05 for wald test, likelihood ratio test,logrank test)
+
+# Interpretation
+
+After adjutsing for covariates, those patients from medicaid/unisured group had 1.46/1.45 times higher hazard of death than those from insured group. 
+The model is overall significant. (p<0.05 for wald test, likelihood ratio test,logrank test)
+
+
+
+
